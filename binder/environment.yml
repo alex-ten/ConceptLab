@@ -1,0 +1,13 @@
+name: environment
+channels:
+  - conda-forge
+dependencies:
+  - python
+  - numpy
+  - pip
+  - pip:
+    - pandas
+    - matplotlib
+    - ipywidgets
+    - scipy
+    - statsmodels
