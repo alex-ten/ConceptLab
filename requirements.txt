@@ -1,0 +1,8 @@
+matplotlib
+numpy
+pandas
+scipy
+statsmodels
+ipywidgets
+nbinteract
+IPython
