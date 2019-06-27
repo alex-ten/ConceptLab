@@ -6,9 +6,6 @@ import operator
 from IPython.display import display
 from scipy.special import comb
 
-from standards import RAWix
-
-
 def may_be_make_dir(path):
     """
     If the directory is created between the `os.path.exists` and the `os.makedirs` calls, the `os.makedirs` will fail
@@ -69,17 +66,17 @@ def get_mask(arr, conds, op='==',):
     return np.all(tl, axis=0)
 
 
-def report_subject_counts(data):
-    r = RAWix()
-    groups = get_unique(data, r.ix('group')).astype(int)
-    conds = get_unique(data, r.ix('cond')).astype(int)
+# def report_subject_counts(data):
+#     r = RAWix()
+#     groups = get_unique(data, r.ix('group')).astype(int)
+#     conds = get_unique(data, r.ix('cond')).astype(int)
 
-    for g in groups:
-        for c in conds:
-            mask = get_mask(data, {r.ix('group'): g, r.ix('cond'): c})
-            n = np.unique(data[mask, r.ix('sid')]).size
-            print('g{} c{}: {}'.format(g, c, n))
-    print('Total:', get_unique(data, r.ix('sid')).size)
+#     for g in groups:
+#         for c in conds:
+#             mask = get_mask(data, {r.ix('group'): g, r.ix('cond'): c})
+#             n = np.unique(data[mask, r.ix('sid')]).size
+#             print('g{} c{}: {}'.format(g, c, n))
+#     print('Total:', get_unique(data, r.ix('sid')).size)
 
 
 def print_arr(arr, cols, nonints=None, group_ind=False, round_=False, pretty=False):
