@@ -20,7 +20,11 @@ main_path = 'supplementary/simple_choice_model/data/main_data.pkl'
 ntm_path = 'supplementary/simple_choice_model/data/ntm_data.pkl'
 r = RAWix()
 colors = ['#43799d', '#cc5b46', '#ffbb00', '#71bc78', '#43799d', '#cc5b46', '#ffbb00', '#71bc78']
-
+tlabels = {
+        1: '1D',
+        2: 'I1D',
+        3: '2D',
+        4: 'R'}
 
 class HitsGeneratorGUI():
     def __init__(self, bandits):
