@@ -42,8 +42,8 @@ def utility(x, alpha=1, beta=1, gamma=0):
     return np.sum(x * np.array([alpha, beta, gamma]), axis=1)
 
 
-def softmax(U):
-    return np.exp(U) / np.sum(np.exp(U))
+def softmax(U, t=1):
+    return np.exp(U/t) / np.sum(np.exp(U/t))
 
 
 def choose(a, det=False):
@@ -97,14 +97,15 @@ def get_sub_data(sid=None, grp=None, ntm=None):
 
 
 class Simulator():
-    def __init__(self, nb_trials, hits_generator, live=False, seed=1):
+    def __init__(self, nb_trials, hits_generator, controls=True, live=False, seed=1):
         self._first = True
         self.nb_trials = nb_trials
-        self.seed = seed
+        
         self.memcap = 15
         self.lpwin = 1
         
         # WIDGETS
+        self.seed = wid.BoundedIntText(min=1, max=100000, value=seed, description='Seed', layout=wid.Layout(width='20%'))
         self.alpha = wid.FloatSlider(min=-10, max=10, value=1, description='alpha', continuous_update=live, layout=wid.Layout(width='80%'))
         self.beta = wid.FloatSlider(min=-10, max=10, value=1, description='beta', continuous_update=live, layout=wid.Layout(width='80%'))
         self.gamma = wid.FloatSlider(min=-10, max=10, value=1, description='gamma', continuous_update=live, layout=wid.Layout(width='80%'))
@@ -119,10 +120,11 @@ class Simulator():
         
         self.sim_button = wid.Button(description='Simulate', button_style='success')
         self.sim_button.on_click(lambda x: self.run_sim())
+        self.out = wid.Output()
         
         self.hits_generator = hits_generator
         
-        self.fig = plt.figure('Simulation', figsize=[8,6])
+        self.fig = plt.figure('Simulation', figsize=[8,4.5])
 
         self.ax1 = vut.pretty(self.fig.add_subplot(221))
         self.ax1.set_ylim(-.5, 3.5)
@@ -142,12 +144,13 @@ class Simulator():
         self.ax3.set_yticklabels([tlabels[i] for i in [4,3,2,1]])
         
         self.init_state=None
-        self.controls_on()
+        if controls: self.controls_on()
         
     def controls_on(self):
         display(wid.HBox([self.sid_picker, self.grp_picker, self.ntm_picker]), 
-                self.update_button, self.sim_button)
-        display(wid.VBox([self.alpha, self.beta, self.gamma, self.trial]))
+                self.update_button, 
+                wid.HBox([self.sim_button, self.seed]))
+        display(wid.VBox([self.alpha, self.beta, self.gamma, self.trial, self.out]))
 
     def update_init_state(self):
         sid, grp, ntm = self.sid_picker.value, self.grp_picker.value, self.ntm_picker.value
@@ -206,8 +209,8 @@ class Simulator():
             hits[t] = hit
         return counter/np.sum(counter), pcs, lps, choices, hits, util
     
-    def plot_sim(self, t, alpha, beta, gamma):
-        with temp_seed(self.seed):
+    def plot_sim(self, t, alpha, beta, gamma, seed):
+        with temp_seed(seed):
             tot, pc, lp, choices, hits, util = self.simulate(alpha, beta, gamma)
             while len(self.ax2.findobj(match=mpl.patches.Rectangle)) > 1: 
                 self.ax2.findobj(match=mpl.patches.Rectangle)[0].remove()
@@ -238,17 +241,20 @@ class Simulator():
                 'LP(t+)': lp[t+1], 
                 'PC(t+)': pc[t+1], 
             }).set_index('tid')
-            display(out)
+            self.out.clear_output(wait=True)
+            with self.out:
+                display(out)
             return out
             
     def run_sim(self):
         if self._first:
             self._first = False
             self.sim = wid.interactive(self.plot_sim,
-                t = self.trial,
-                alpha = self.alpha, 
-                beta = self.beta, 
-                gamma = self.gamma)
+                                        t = self.trial,
+                                        alpha = self.alpha, 
+                                        beta = self.beta, 
+                                        gamma = self.gamma,
+                                        seed = self.seed)
             self.sim.update()
         else:
-            self.sim.update()       
+            self.sim.update()
