@@ -188,5 +188,4 @@ def get_nonparametric(grp=None, ntm=None):
         t[t >= 100] = 99
         p = probs[tid-1, t]
         return (np.random.rand(t.size) <= p).astype(int)
-    
     return nonparametric_model
