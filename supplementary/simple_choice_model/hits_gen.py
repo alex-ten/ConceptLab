@@ -27,7 +27,7 @@ tlabels = {
         4: 'R'}
 
 class HitsGeneratorGUI():
-    def __init__(self, bandits):
+    def __init__(self, bandits, gui=False):
         self.grp_picker = wid.Dropdown(options=[('All', None), ('Free', 0), ('Strategic', 1)], 
                                        value=None, description='Group: ', layout=wid.Layout(width='30%'),)
         self.ntm_picker = wid.Dropdown(options=[('All', None), ('1', 1), ('2', 2), ('3', 3)], 
@@ -48,19 +48,20 @@ class HitsGeneratorGUI():
         self.reset_button = wid.Button(description='Fit to all data', button_style='warning')
         self.reset_button.on_click(lambda x: self.reset())
         
-        self.fig = plt.figure('Hits generator', figsize=[8.5, 4])
-        self.ax1, self.ax2 = vut.pretty(self.fig.add_subplot(1,2,1)), vut.pretty(self.fig.add_subplot(1,2,2))
-        
-        self.ax1.set_ylim(.4, 1.02)
-        self.ax1.set_xlim(0, 250)
-        self.ax2.set_ylim(.4, 1.02)
-        
-        self.ax1.set_title('$P(hit \mid trial)$')
-        self.ax2.set_title('Simulated data')
-        
-        self.axes = [self.ax1, self.ax2]
-        
-        self.controls_on()
+        if gui:
+            self.fig = plt.figure('Hits generator', figsize=[8.5, 4])
+            self.ax1, self.ax2 = vut.pretty(self.fig.add_subplot(1,2,1)), vut.pretty(self.fig.add_subplot(1,2,2))
+            
+            self.ax1.set_ylim(.4, 1.02)
+            self.ax1.set_xlim(0, 250)
+            self.ax2.set_ylim(.4, 1.02)
+            
+            self.ax1.set_title('$P(hit \mid trial)$')
+            self.ax2.set_title('Simulated data')
+            
+            self.axes = [self.ax1, self.ax2]
+            
+            self.controls_on()
         
     def prob(self, trial, tid):
         b0, b1 = self.params[tid]
@@ -189,3 +190,13 @@ def get_nonparametric(grp=None, ntm=None):
         p = probs[tid-1, t]
         return (np.random.rand(t.size) <= p).astype(int)
     return nonparametric_model
+
+
+def generate(trial, tid, params_dict):
+    b0, b1 = params_dict[tid]
+    prob = 1 / (1 + np.exp(-(b0 + b1*trial)))
+    try:
+        iter(trial)
+        return (np.random.rand(trial.size) <= prob).astype(int)
+    except TypeError as te:
+        return int(np.random.rand() <= prob)

@@ -12,6 +12,7 @@ import contextlib
 
 # Local libraries
 import vis_utils as vut
+from supplementary.simple_choice_model import hits_gen
 import loc_utils as lut
 import ipywidgets as wid
 import loc_utils as lut
@@ -45,20 +46,13 @@ def utility(x, alpha=1, beta=1, gamma=0):
 
 
 def softmax(U, t=1):
-    if t < .00001: t=.00001
-    return np.exp(U/t) / np.sum(np.exp(U/t))
+    return np.exp(U*t) / np.sum(np.exp(U*t))
 
 
-def choose(a, det=False):
-    ''' Choice function
-    if det  : choose an option with maximum utility
-    if !det : choose an option probabilistically, in proportion to utility'''
-    if det:
-        return np.argmax(a)
-    else:
-        cum_probs = np.cumsum(a, axis=0)
-        rand = np.random.rand(a.shape[-1])
-        return (rand<cum_probs).argmax()
+def choose(a):
+    cum_probs = np.cumsum(a, axis=0)
+    rand = np.random.rand(a.shape[-1])
+    return (rand<cum_probs).argmax()
 
 
 @contextlib.contextmanager
@@ -69,11 +63,14 @@ def temp_seed(seed):
         yield
     finally:
         np.random.set_state(state)
-    
+
+
+def rand_params(bounds):
+    return np.array([np.random.uniform(l, u) if bounds else np.random.rand() for l, u in bounds])
+
 
 def get_sub_data(sid=None, grp=None, ntm=None):
-    from loc_utils import unpickle
-    arrdata = unpickle(main_path)['main'][:, [r.ix('group'),r.ix('sid'),r.ix('trial'),r.ix('cat'),r.ix('cor'),r.ix('blkt')]]
+    arrdata = lut.unpickle(main_path)['main'][:, [r.ix('group'),r.ix('sid'),r.ix('trial'),r.ix('cat'),r.ix('cor'),r.ix('blkt')]]
     df_dict = {}
     for i, (col, dt) in enumerate(zip('grp,sid,trial,tid,cor,blkt'.split(','), [int,int,int,int,int,int])):
         df_dict[col] = pd.Series(arrdata[:, i], dtype=dt)
@@ -93,6 +90,96 @@ def get_sub_data(sid=None, grp=None, ntm=None):
 
     df = df.loc[:, ['blkt','tid','cor']].pivot(index='blkt', columns='tid', values='cor')
     return df, sid
+
+
+def get_multiple_sids(sids):
+    arrdata = lut.unpickle(main_path)['main'][:, [r.ix('sid'),r.ix('trial'),r.ix('cat'),r.ix('cor')]]
+    df_dict = {}
+    for i, (col, dt) in enumerate(zip('sid,trial,tid,cor'.split(','), [int,int,int,int])):
+        df_dict[col] = pd.Series(arrdata[:, i], dtype=dt)
+    df = pd.DataFrame(df_dict)
+    df = df.loc[df.trial<=60]
+
+    arr = np.zeros([np.shape(sids)[0], 15, 4])
+    for i, sid in enumerate(sids):
+        for j, tid in enumerate([1,2,3,4]):
+            arr[i, :, j] = df.loc[(df.sid==sid) & (df.tid==tid), 'cor'].values
+
+    return arr
+
+
+def prepare_fit_data(save_as=''):
+    size0, size1, overlap = 10, 9, 4
+    cols = ['sid','grp','stage','trial','t0','loc_p1','loc_p2','loc_p3','loc_p4','loc_pc1','loc_pc2','loc_pc3','loc_pc4','cor']
+    df = lut.unpickle('supplementary/simple_choice_model/data/trials_data_w15.pkl')[cols]
+    df = df.loc[df.trial<=310, :]
+
+    sids, grps, ntms, trials, glps, gpcs, gins, gchs = [], [], [], [], [], [], [], []
+    for i, sdf in df.groupby('sid'):
+        crit_pval = sdf.loc[:, 'loc_p1':'loc_p3'] <= .01
+        crit_pc = sdf.loc[:, 'loc_pc1':'loc_pc3'] > .5
+        learned = crit_pval.values & crit_pc.values
+        ntm = np.any(learned, axis=0).sum()
+        sid = sdf.loc[:, 'sid'].values[0]
+        grp = sdf.loc[:, 'grp'].values[0]
+
+        mem = np.full([size0+size1-overlap, 4], np.nan)
+        mem[:, 0] = sdf.loc[(sdf.t0==1) & (sdf.stage==0), 'cor']
+        mem[:, 1] = sdf.loc[(sdf.t0==2) & (sdf.stage==0), 'cor']
+        mem[:, 2] = sdf.loc[(sdf.t0==3) & (sdf.stage==0), 'cor']
+        mem[:, 3] = sdf.loc[(sdf.t0==4) & (sdf.stage==0), 'cor']
+
+        # Data of the 1st free-play trial
+        lps = [np.abs(mem[:-size0, :].mean(axis=0) - mem[-size1:, :].mean(axis=0))] 
+        pcs = [np.mean(mem, axis=0)]
+        chs = [np.eye(4)[sdf.t0.values[61]-1, :]]
+
+        x = np.stack([lps[0], pcs[0]], axis=0).T
+        choices = sdf.t0.values[62:]
+        cor = sdf.cor.values[61:-1]
+        for tid, outcome in zip(choices, cor):
+            j = tid - 1 # choice index
+
+            # Update hits memory
+            mem[:-1, j] = mem[1:, j]
+            mem[-1, j] = outcome
+
+            # Update expected reward (PC)
+            pc_vect = np.mean(mem, axis=0)
+            x[j, 1] = pc_vect[j] # PC
+
+            # Update LP
+            lp_vect = np.abs(mem[:-size0, :].mean(axis=0) - mem[-size1:, :].mean(axis=0))
+            x[j, 0] = lp_vect[j] # LP
+
+            # ========== Record data ============
+            pcs.append(pc_vect)
+            lps.append(lp_vect)
+            chs.append(np.eye(4)[j, :])
+
+        glps.append(np.stack(lps, axis=0))
+        gpcs.append(np.stack(pcs, axis=0))
+        gchs.append(np.stack(chs))
+        gins.append(np.zeros_like(lps))
+        gins[-1][1:] = chs[:-1]
+
+        sids.append(np.ones([len(lps), 1]) * sid)
+        grps.append(np.ones([len(lps), 1]) * grp)
+        ntms.append(np.ones([len(lps), 1]) * ntm)
+        trials.append((np.arange(len(lps))+1).reshape([-1, 1]))
+
+    cols = []
+    for col in (sids, grps, ntms, trials, glps, gpcs, gins, gchs):
+        # print(np.concatenate(col, axis=0).shape)
+        cols.append(np.concatenate(col, axis=0))
+
+    data = np.concatenate(cols, axis=1)
+    colnames = 'sid,grp,ntm,trial,lp1,lp2,lp3,lp4,pc1,pc2,pc3,pc4,in1,in2,in3,in4,ch1,ch2,ch3,ch4'.split(',')
+    df = pd.DataFrame(data, columns = colnames)
+    for colname in 'sid,grp,ntm,trial,in1,in2,in3,in4,ch1,ch2,ch3,ch4'.split(','):
+        df.loc[:, colname] = df.loc[:, colname].astype(int)
+    
+    if save_as: lut.dopickle(save_as, df)
 
 
 def evaluate(sdata, choices, crit_pc=.5, crit_pval=.01):
@@ -119,30 +206,68 @@ def evaluate(sdata, choices, crit_pc=.5, crit_pval=.01):
     return weighted_scores, sc_lep
 
 
+def simple_simulation(init_state, win1, win2, N, hits, alpha, beta, gamma, tau):
+        counter = np.array([1, 1, 1, 1])
+        mem = init_state.copy()
+        init_pc = np.mean(mem, axis=0)
+        init_lp = np.abs(mem[:win1, :].mean(axis=0) - mem[win2:, :].mean(axis=0))
+        init_in = np.zeros_like(init_pc)
+        choices = np.zeros(N)
+        x = np.stack([init_lp, init_pc, init_in], axis=0).T
+        for trial in range(N):
+            # Compute utility based on state x, choose the next task based on utility, 
+            # and get feedback by playing the task
+            U = utility(x, alpha=alpha, beta=beta, gamma=gamma)
+            i = choose(softmax(U, t=tau), det=False)
+            hit = hits[counter[i]-1, i]
+            counter[i] += 1
+
+            # ========== Update memory ==========
+            # 1. Update last choice
+            x[:, 2] = 0 
+            x[i, 2] = 1
+
+            # 2. Update hits memory
+            mem[:-1, i] = mem[1:, i]
+            mem[-1, i] = hit
+
+            # 3. Update expected reward (PC)
+            pc_vect = np.mean(mem, axis=0)
+            x[i, 1] = pc_vect[i] # PC
+
+            # 4. Update LP
+            lp_vect = np.abs(mem[:win1, :].mean(axis=0) - mem[win2:, :].mean(axis=0))
+            x[i, 0] = lp_vect[i] # LP
+
+            choices[trial] = i
+        return choices
+        # return counter/np.sum(counter), pcs, lps, choices, hits, util
+
+
 class Simulator():
     def __init__(self, nb_trials, hits_generator, controls=True, live=False, seed=1,
                  alpha=1, beta=1, gamma=1, tau=1):
         self._first = True
         self.nb_trials = nb_trials
         
-        self.memcap = 15
-        self.lpwin = 1
-        
+        self.win1 = 10
+        self.win2 = 9
+        self.overlap = 4
+        self.memcap = self.win1 + self.win2 - self.overlap
+
         # WIDGETS
         self.seed = wid.BoundedIntText(min=1, max=100000, value=seed, description='Seed', layout=wid.Layout(width='20%'), continuous_update=live)
         self.rolls = wid.BoundedIntText(min=1, max=30, value=1, description='N runs', layout=wid.Layout(width='15%'), continuous_update=live)
 
-        self.alpha = wid.FloatSlider(min=-10, max=10, value=alpha, description='alpha', continuous_update=live, layout=wid.Layout(width='80%'))
-        self.beta = wid.FloatSlider(min=-10, max=10, value=beta, description='beta', continuous_update=live, layout=wid.Layout(width='80%'))
-        self.gamma = wid.FloatSlider(min=-10, max=10, value=gamma, description='gamma', continuous_update=live, layout=wid.Layout(width='80%'))
+        self.alpha = wid.FloatSlider(min=-10, max=10, value=alpha, step=.01, description='alpha', continuous_update=live, layout=wid.Layout(width='80%'))
+        self.beta = wid.FloatSlider(min=-10, max=10, value=beta, step=.01, description='beta', continuous_update=live, layout=wid.Layout(width='80%'))
+        self.gamma = wid.FloatSlider(min=-10, max=10, value=gamma, step=.01, description='gamma', continuous_update=live, layout=wid.Layout(width='80%'))
         self.trial = wid.IntSlider(min=0, max=nb_trials-1, value=nb_trials-1, description='trial', continuous_update=live, layout=wid.Layout(width='80%'))
-        self.tau = wid.FloatSlider(min=0.01, max=3, value=tau, step=.01, description='temperature', layout=wid.Layout(width='80%'), continuous_update=live)
+        self.tau = wid.FloatSlider(min=0.0, max=100.0, value=tau, step=.01, description='temperature', layout=wid.Layout(width='80%'), continuous_update=live)
         self.rid = wid.IntSlider(min=1, max=1, value=1, description='Run #', continuous_update=live)
         self.rolls.observe(self.rolls_change, 'value')
-        self.grp_picker = wid.Dropdown(options=[('All', None), ('Free', 0), ('Strategic', 1)], 
-                                       value=None, description='Group: ', layout=wid.Layout(width='20%'))
-        self.ntm_picker = wid.Dropdown(options=[('All', None), ('1', 1), ('2', 2), ('3', 3)], 
-                                       value=None, description='NTM: ', layout=wid.Layout(width='20%'))
+        self.grp_picker = wid.Dropdown(options=[('All', None), ('Free', 0), ('Strategic', 1)], value=None, description='Group: ', layout=wid.Layout(width='20%'))
+        self.ntm_picker = wid.Dropdown(options=[('All', None), ('1', 1), ('2', 2), ('3', 3)],   value=None, description='NTM: ', layout=wid.Layout(width='20%'))
         self.sid_picker = wid.Text(value='', placeholder='ID or blank', description='Subject ID', layout=wid.Layout(width='20%'))
         self.update_button = wid.Button(description='Update initial state', button_style='info')
         self.update_button.on_click(lambda x: self.update_init_state())
@@ -152,47 +277,49 @@ class Simulator():
         self.out = wid.Output()
         
         self.hits_generator = hits_generator
-        
-        self.fig1 = plt.figure('sim^1', figsize=[8, 4.5])
-
-        self.ax1 = vut.pretty(self.fig1.add_subplot(221))
-        self.ax1.set_ylim(-.5, 3.5)
-        self.ax1.set_yticks([0,1,2,3])
-        self.ax1.set_yticklabels([tlabels[i] for i in [4,3,2,1]])
-        self.ax1.set_xticks(list(range(15)))
-        self.ax1.set_xticklabels(list(range(15)))
-        self.ax1.imshow(np.zeros([4,15]), cmap='binary')
-        
-        self.ax2 = vut.pretty(self.fig1.add_subplot(222))
-        self.ax2.set_xticks([0,1,2,3])
-        self.ax2.set_xticklabels([tlabels[i] for i in [1,2,3,4]])
-        self.ax2.set_ylim(0, 1)
-        
-        self.ax3 = vut.pretty(self.fig1.add_subplot(212))
-        self.ax3.set_ylim(-4, 1)
-        self.ax3.set_yticks([-3,-2,-1,0])
-        self.ax3.set_yticklabels([tlabels[i] for i in [4,3,2,1]])
-
-        # display controls before Axes4
         self.init_state=None
-        if controls: self.controls_on()
+        self.controls = controls
 
-        self.fig2 = plt.figure('sim^2', figsize=[6, 3])
-        self.ax4 = vut.pretty(self.fig2.add_subplot(121))
-        self.ax4.set_xlim(-.02, 1.02)
-        self.ax4.set_ylim(0.6, 1.02)
-        self.ax4.set_ylabel('Weighted score')
-        self.ax4.set_xlabel('Self-challenge')
-        self.ax4.set_title('Learning outcomes')
+        if controls:
+            self.fig1 = plt.figure('sim^1', figsize=[8, 4.5])
 
-        self.ax5 = vut.pretty(self.fig2.add_subplot(122))
-        self.ax5.set_xticks([0,1,2,3])
-        self.ax5.set_xticklabels([tlabels[i] for i in [1,2,3,4]]) 
-        self.ax5.set_ylabel('% selection')
-        self.ax5.set_xlabel('Task ID')
-        self.ax5.set_ylim(0, 1)
-        self.ax4.set_title('Mean task selection')
-        self.fig2.tight_layout()
+            self.ax1 = vut.pretty(self.fig1.add_subplot(221))
+            self.ax1.set_ylim(-.5, 3.5)
+            self.ax1.set_yticks([0,1,2,3])
+            self.ax1.set_yticklabels([tlabels[i] for i in [4,3,2,1]])
+            self.ax1.set_xticks(list(range(15)))
+            self.ax1.set_xticklabels(list(range(15)))
+            self.ax1.imshow(np.zeros([4,15]), cmap='binary')
+            
+            self.ax2 = vut.pretty(self.fig1.add_subplot(222))
+            self.ax2.set_xticks([0,1,2,3])
+            self.ax2.set_xticklabels([tlabels[i] for i in [1,2,3,4]])
+            self.ax2.set_ylim(0, 1)
+            
+            self.ax3 = vut.pretty(self.fig1.add_subplot(212))
+            self.ax3.set_ylim(-4, 1)
+            self.ax3.set_yticks([-3,-2,-1,0])
+            self.ax3.set_yticklabels([tlabels[i] for i in [4,3,2,1]])
+
+            # display controls before Axes4
+            self.controls_on()
+
+            self.fig2 = plt.figure('sim^2', figsize=[6, 3])
+            self.ax4 = vut.pretty(self.fig2.add_subplot(121))
+            self.ax4.set_xlim(-.02, 1.02)
+            self.ax4.set_ylim(0.6, 1.02)
+            self.ax4.set_ylabel('Weighted score')
+            self.ax4.set_xlabel('Self-challenge')
+            self.ax4.set_title('Learning outcomes')
+
+            self.ax5 = vut.pretty(self.fig2.add_subplot(122))
+            self.ax5.set_xticks([0,1,2,3])
+            self.ax5.set_xticklabels([tlabels[i] for i in [1,2,3,4]]) 
+            self.ax5.set_ylabel('% selection')
+            self.ax5.set_xlabel('Task ID')
+            self.ax5.set_ylim(0, 1)
+            self.ax4.set_title('Mean task selection')
+            self.fig2.tight_layout()
 
     def controls_on(self):
         display(wid.HBox([self.update_button, self.sid_picker, self.grp_picker, self.ntm_picker]), 
@@ -207,16 +334,17 @@ class Simulator():
             print('Subject {} not found in (GRP=\'{}\' & NTM=\'{}\'). Init state not updated, try another search'.format(sid, grp, ntm))
         else: 
             self.init_state, self.init_state_id = new_init_state, new_init_state_id
-            self.ax1.imshow(np.flipud(self.init_state.T.values.copy()), cmap='binary')
             self.sid_picker.placeholder = str(self.init_state_id)
             self.sid_picker.value = ''
-            self.ax1.set_title('SID: {}'.format(self.init_state_id))
+            if self.controls:
+                self.ax1.imshow(np.flipud(self.init_state.T.values.copy()), cmap='binary')
+                self.ax1.set_title('SID: {}'.format(self.init_state_id))
         
     def simulate(self, alpha, beta, gamma, tau):
         counter = np.array([1, 1, 1, 1])
         mem = self.init_state.values.copy()[-self.memcap:, :]
         init_pc = np.mean(mem, axis=0)
-        init_lp = np.abs(mem[:-self.lpwin, :].mean(axis=0) - mem[-self.lpwin:, :].mean(axis=0))
+        init_lp = np.abs(mem[:-self.win1, :].mean(axis=0) - mem[-self.win2:, :].mean(axis=0))
         init_in = np.zeros_like(init_pc)
         lps, pcs = [init_lp], [init_pc] 
         util = []
@@ -227,7 +355,7 @@ class Simulator():
             # Compute utility based on state x, choose the next task based on utility, 
             # and get feedback by playing the task
             U = utility(x, alpha=alpha, beta=beta, gamma=gamma)
-            i = choose(softmax(U, t=tau), det=False)
+            i = choose(softmax(U, t=tau))
             counter[i] += 1
             hit = self.hits_generator.generate(counter[i], i+1)
 
@@ -245,7 +373,7 @@ class Simulator():
             x[i, 1] = pc_vect[i] # PC
 
             # 4. Update LP
-            lp_vect = np.abs(mem[:-self.lpwin, :].mean(axis=0) - mem[-self.lpwin:, :].mean(axis=0))
+            lp_vect = np.abs(mem[:-self.win1, :].mean(axis=0) - mem[-self.win2:, :].mean(axis=0))
             x[i, 0] = lp_vect[i] # LP
 
             # ========== Record data ============
